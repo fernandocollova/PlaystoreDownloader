@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Iterable
 
-from tqdm import tqdm
+from tqdm.asyncio import tqdm
 
 logger = logging.getLogger(__name__)
 

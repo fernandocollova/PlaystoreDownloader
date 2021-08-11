@@ -18,13 +18,13 @@ class Downloader:
         self.out = out
         self.tag = tag
 
-    def download(self, package_name):
+    async def download(self, package_name):
         meta = PackageMeta(
             api=self.api,
             package_name=package_name.strip(" '\""),
         )
         out_dir = OutDir(self.out, tag=self.tag, meta=meta)
-        return self.api.download(
+        return await self.api.download(
             meta=meta,
             out_dir=out_dir,
             download_obb=self.blobs,

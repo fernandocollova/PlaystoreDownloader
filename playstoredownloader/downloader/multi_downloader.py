@@ -1,4 +1,4 @@
-from .downloader import Downloader
+import asyncio
 
 class MultiDownloader:
     def __init__(self, package_list, downloader):
@@ -6,5 +6,7 @@ class MultiDownloader:
         self.downloader = downloader
 
     def download(self):
-        for package in self.package_list:
-            self.downloader.download(package.strip(" '\""))
+        coros = [self.downloader.download(package) for package in self.package_list]
+        loop = asyncio.get_event_loop()
+        tasks = asyncio.gather(*coros)
+        loop.run_until_complete(tasks)

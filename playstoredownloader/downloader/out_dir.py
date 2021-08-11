@@ -45,5 +45,5 @@ class OutDir(type(pathlib.Path())):
 
     def split_apk_path(self, split_apk):
         version_code = self.meta.details.docV2.details.appDetails.versionCode
-        filename = f"{split_apk.name}.{version_code}.{self.package_name}.apk"
+        filename = f"{split_apk.name}.{version_code}.{self.meta.docV2.docid}.apk"
         return self.joinpath(self.add_tag(filename))

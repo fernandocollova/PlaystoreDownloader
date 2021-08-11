@@ -3,19 +3,20 @@
 import json
 import logging
 import os
-from pathlib import Path
 import platform
 import re
 import sys
+from pathlib import Path
 from typing import Iterable
 
 import requests
 import requests.packages.urllib3.util.ssl_
 from google.protobuf import json_format
+from playstoredownloader.downloader.out_dir import OutDir
+from playstoredownloader.playstore import playstore_proto_pb2 as playstore_protobuf
 from requests.exceptions import ChunkedEncodingError
 
-from playstoredownloader.playstore import playstore_proto_pb2 as playstore_protobuf
-from playstoredownloader.downloader.out_dir import OutDir
+from .apk_downloader import ApkDownloader
 from .credentials import EncryptedCredentials
 from .meta import PackageMeta
 from .util import Util
@@ -65,7 +66,8 @@ class Playstore(object):
                             the credentials.
         """
 
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger = logging.getLogger(
+            f"{__name__}.{self.__class__.__name__}")
 
         # Load all the necessary configuration data and perform the login. If something
         # goes wrong in this phase, no further operations can be executed.
@@ -84,11 +86,13 @@ class Playstore(object):
             self.lang: str = self.configuration["LANG"]
 
         except json.decoder.JSONDecodeError as ex:
-            self.logger.critical(f"The configuration file is not a valid json: {ex}")
+            self.logger.critical(
+                f"The configuration file is not a valid json: {ex}")
             raise
 
         except KeyError as ex:
-            self.logger.critical(f"The configuration file is missing the {ex} field")
+            self.logger.critical(
+                f"The configuration file is missing the {ex} field")
             raise
 
         self._login()
@@ -112,7 +116,7 @@ class Playstore(object):
                 f"Unable to find configuration file '{config_file}'"
             )
 
-        self.logger.debug(f"Reading '{config_file}' configuration file")        
+        self.logger.debug(f"Reading '{config_file}' configuration file")
         self.configuration = json.loads(config_filepath.read_text())[0]
 
     @Util.retry(exception=RuntimeError)
@@ -165,8 +169,10 @@ class Playstore(object):
         """
 
         if not hasattr(self, "auth_token"):
-            self.logger.critical("Please login before attempting any other operation")
-            raise RuntimeError("Please login before attempting any other operation")
+            self.logger.critical(
+                "Please login before attempting any other operation")
+            raise RuntimeError(
+                "Please login before attempting any other operation")
 
         headers = {
             "Accept-Language": self.lang_code,
@@ -193,89 +199,15 @@ class Playstore(object):
                 url, headers=headers, params=query, data=data, verify=True
             )
         else:
-            response = requests.get(url, headers=headers, params=query, verify=True)
+            response = requests.get(url, headers=headers,
+                                   params=query, verify=True)
 
-        message = playstore_protobuf.ResponseWrapper.FromString(response.content)
+        message = playstore_protobuf.ResponseWrapper.FromString(
+            response.content)
 
         return message
 
-    def _download_single_file(
-        self,
-        destination_file: str,
-        server_response: requests.Response,
-        show_progress_bar: bool = False,
-        download_str: str = "Downloading file",
-        error_str: str = "Unable to download the entire file",
-    ) -> Iterable[int]:
-        """
-        Internal method to download a file contained in a server response and save it
-        to a specific destination.
-
-        :param destination_file: The destination path where to save the downloaded file.
-        :param server_response: The response from the server, containing the content of
-                                the file to be saved.
-        :param show_progress_bar: Flag indicating whether to show a progress bar in the
-                                  terminal during the download of the file.
-        :param download_str: The message to show next to the progress bar during the
-                             download of the file
-        :param error_str: The error message of the exception that will be raised if
-                          the download of the file fails.
-        :return: A generator that returns the download progress (0-100) at each
-                 iteration.
-        """
-        chunk_size = 1024
-        file_size = int(server_response.headers["Content-Length"])
-
-        # Download the file and save it, yielding the progress (in the range 0-100).
-        try:
-            with open(destination_file, "wb") as f:
-                last_progress = 0
-                for index, chunk in enumerate(
-                    Util.show_list_progress(
-                        server_response.iter_content(chunk_size=chunk_size),
-                        interactive=show_progress_bar,
-                        unit=" KB",
-                        total=(file_size // chunk_size),
-                        description=download_str,
-                    )
-                ):
-                    current_progress = 100 * index * chunk_size // file_size
-                    if current_progress > last_progress:
-                        last_progress = current_progress
-                        yield last_progress
-
-                    if chunk:
-                        f.write(chunk)
-                        f.flush()
-
-                # Download complete.
-                yield 100
-        except ChunkedEncodingError:
-            # There was an error during the download so not all the file was written
-            # to disk, hence there will be a mismatch between the expected size and
-            # the actual size of the downloaded file, but the next code block will
-            # handle that.
-            pass
-
-        # Check if the entire file was downloaded correctly, otherwise raise an
-        # exception.
-        if file_size != os.path.getsize(destination_file):
-            self.logger.error(
-                f"Download of '{destination_file}' not completed, please retry, "
-                f"the file '{destination_file}' is corrupted and will be removed"
-            )
-
-            try:
-                os.remove(destination_file)
-            except OSError:
-                self.logger.warning(
-                    f"The file '{destination_file}' is corrupted and should be "
-                    f"removed manually"
-                )
-
-            raise RuntimeError(error_str)
-
-    def _download_with_progress(
+    async def _download_with_progress(
         self,
         meta: PackageMeta,
         out_dir: OutDir,
@@ -387,64 +319,42 @@ class Playstore(object):
             "Accept-Encoding": "",
         }
 
-        # Execute another request to get the actual apk file.
-        response = requests.get(
-            temp_url, headers=headers, cookies=cookies, verify=True, stream=True
+        apk_downloader = ApkDownloader(
+            headers=headers,
+            cookies=cookies,
+            progress=show_progress_bar,
         )
 
-        yield from self._download_single_file(
-            out_dir.apk_path,
-            response,
-            show_progress_bar,
-            f"Downloading {meta.package_name}",
-            "Unable to download the entire application",
-        )
+        # Execute another request to get the actual apk file.
+        async for progress in apk_downloader.download(
+            url=temp_url,
+            path=out_dir.apk_path,
+            download_str=f"Downloading {meta.package_name}",
+            error_str="Unable to download the entire application",
+        ):
+            yield progress
 
         if download_obb:
             # Save the additional .obb files for this application.
             for obb in additional_files:
-
-                # Execute another query to get the actual file.
-                response = requests.get(
-                    obb.downloadUrl,
-                    headers=headers,
-                    cookies=cookies,
-                    verify=True,
-                    stream=True,
-                )
-
-                obb_file_name = out_dir.obb_path(obb)
-
-                yield from self._download_single_file(
-                    obb_file_name,
-                    response,
-                    show_progress_bar,
-                    f"Downloading additional .obb file for {meta.package_name}",
-                    "Unable to download completely the additional .obb file(s)",
-                )
+                async for progress in apk_downloader.download(
+                    url=obb.downloadUrl,
+                    path=out_dir.obb_path(obb),
+                    download_str=f"Downloading additional .obb file for {meta.package_name}",
+                    error_str="Unable to download completely the additional .obb file(s)",
+                ):
+                    yield progress
 
         if download_split_apks:
-            # Save the split apk(s) for this application.
             for split_apk in split_apks:
+                async for progress in apk_downloader.download(
+                    url=split_apk.downloadUrl,
+                    path=out_dir.split_apk_path(split_apk),
+                    download_str=f"Downloading split apk for {meta.package_name}",
+                    error_str="Unable to download completely the additional split apk file(s)",
+                ):
+                    yield progress
 
-                # Execute another query to get the actual file.
-                response = requests.get(
-                    split_apk.downloadUrl,
-                    headers=headers,
-                    cookies=cookies,
-                    verify=True,
-                    stream=True,
-                )
-
-                split_apk_file_name = out_dir.split_apk_path(split_apk)
-
-                yield from self._download_single_file(
-                    split_apk_file_name,
-                    response,
-                    show_progress_bar,
-                    f"Downloading split apk for {meta.package_name}",
-                    "Unable to download completely the additional split apk file(s)",
-                )
 
     ############################
     # Playstore Public Methods #
@@ -636,9 +546,7 @@ class Playstore(object):
 
         return doc
 
-
-
-    def download(
+    async def download(
         self,
         meta: PackageMeta,
         out_dir: Path,
@@ -662,20 +570,15 @@ class Playstore(object):
         :return: True if the file was downloaded correctly, False otherwise.
         """
 
-        try:
-            # Consume the generator reporting the download progress.
-            list(
-                self._download_with_progress(
-                    meta=meta,
-                    out_dir=out_dir,
-                    download_obb=download_obb,
-                    download_split_apks=download_split_apks,
-                    show_progress_bar=show_progress_bar,
-                )
-            )
-        except Exception as e:
-            self.logger.error(f"Error during the download: {e}", exc_info=True)
-            return False
+        # Consume the generator reporting the download progress.
+        gen = self._download_with_progress(
+            meta=meta,
+            out_dir=out_dir,
+            download_obb=download_obb,
+            download_split_apks=download_split_apks,
+            show_progress_bar=show_progress_bar,
+        )
+        [_ async for _ in gen]
 
         # The apk and the additional files (if any) were downloaded correctly.
         return True
