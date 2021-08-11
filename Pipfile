@@ -10,6 +10,8 @@ requests = "*"
 pycryptodome = "*"
 tqdm = "*"
 flask-socketio = "*"
+aiohttp = "*"
+aiofiles = "*"
 
 [dev-packages]
 pytest-cov = "*"
